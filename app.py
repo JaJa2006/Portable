@@ -1,12 +1,13 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from sentence_transformers import SentenceTransformer, util
 from llama_cpp import Llama
 from huggingface_hub import hf_hub_download
 import os
-from sklearn.metrics.pairwise import cosine_similarity
 
 st.title("Threat Event Grouping Application")
+
 
 # auto-download model from huggingface hub
 def download_hf_file(repo_id, filename, local_dir="models"):
@@ -23,29 +24,22 @@ def download_hf_file(repo_id, filename, local_dir="models"):
         local_dir_use_symlinks=False  # required for Streamlit Cloud
     )
 
-# Embedding Model Loader
+
+# embedding Model Loader
 @st.cache_resource
 def load_embedding_model():
-    repo_id = "Pekarnick/e5-large-v2-Q4_K_M-GGUF"
-    file_name = "e5-large-v2-q4_k_m.gguf"
-    model_path = download_hf_file(repo_id, file_name)
+    model_name = "Xenova/e5-large-v2"
+    return SentenceTransformer(model_name)
 
-    return Llama(model_path=model_path, n_ctx=2048, n_threads=8)
 
-embedding_model = load_embedding_model()
+model = load_embedding_model()
 
-# Function to get embeddings from GGUF model
-def get_embedding(text):
-    """Return vector embeddings from GGUF model"""
-    prompt = f"embed: {text}"  # instruction for GGUF embedding model
-    result = embedding_model(prompt, max_tokens=1)
-    return np.array(result["choices"][0]["embedding"], dtype=np.float32)
 
-# LLM Loader
+# LLM Loader (GGUF models)
 @st.cache_resource
 def load_llm():
     repo_id = "Qwen/Qwen2-0.5B-Instruct-GGUF"
-    file_name = "qwen2-0_5b-instruct-q4_0.gguf"
+    file_name = "Qwen2-0.5B-Instruct-Q8_0.gguf"
 
     model_path = download_hf_file(repo_id, file_name)
 
@@ -55,7 +49,9 @@ def load_llm():
         n_threads=8
     )
 
+
 llm = load_llm()
+
 
 # LLM-based classification helpers
 def ai_check_group_match(threat_event, current_group, risk_info):
@@ -97,13 +93,15 @@ def ai_propose_new_group(threat_event, risk_info):
     return res["choices"][0]["text"].strip()
 
 
-# upload groupings file
+# upload file
 groupings_file = st.file_uploader("Upload Groupings Excel", type="xlsx")
 
 if groupings_file:
     groupings = pd.read_excel(groupings_file)
-    # compute embeddings for all threat events
-    group_embeddings = np.vstack([get_embedding(te) for te in groupings["Threat Event"]])
+    group_embeddings = model.encode(
+        groupings["Threat Event"].tolist(),
+        normalize_embeddings=True
+    )
 
 uploaded_file = st.file_uploader("Upload Threat Events Excel", type="xlsx")
 
@@ -131,8 +129,8 @@ if uploaded_file and groupings_file:
             })
             continue
 
-        event_emb = get_embedding(threat_event)
-        sims = cosine_similarity(event_emb.reshape(1, -1), group_embeddings).flatten()
+        event_emb = model.encode([threat_event], normalize_embeddings=True)
+        sims = util.cos_sim(event_emb, group_embeddings).numpy().flatten()
 
         groupings["Similarity"] = sims
         avg_scores = groupings.groupby("Group Name")["Similarity"].mean()
@@ -173,5 +171,3 @@ if uploaded_file and groupings_file:
 
     st.subheader("Final Results")
     st.dataframe(pd.DataFrame(results))
-
-
