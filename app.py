@@ -23,7 +23,7 @@ def download_hf_file(repo_id, filename, local_dir="models"):
         local_dir_use_symlinks=False  # required for Streamlit Cloud
     )
 
-# Embedding Model Loader (GGUF e5-large-v2-Q4_K_M)
+# Embedding Model Loader
 @st.cache_resource
 def load_embedding_model():
     repo_id = "Pekarnick/e5-large-v2-Q4_K_M-GGUF"
@@ -41,11 +41,11 @@ def get_embedding(text):
     result = embedding_model(prompt, max_tokens=1)
     return np.array(result["choices"][0]["embedding"], dtype=np.float32)
 
-# LLM Loader (Qwen GGUF models)
+# LLM Loader
 @st.cache_resource
 def load_llm():
     repo_id = "Qwen/Qwen2-0.5B-Instruct-GGUF"
-    file_name = "Qwen2-0_5B-Instruct-Q8_0.gguf"
+    file_name = "qwen2-0_5b-instruct-q4_0.gguf"
 
     model_path = download_hf_file(repo_id, file_name)
 
@@ -173,4 +173,5 @@ if uploaded_file and groupings_file:
 
     st.subheader("Final Results")
     st.dataframe(pd.DataFrame(results))
+
 
