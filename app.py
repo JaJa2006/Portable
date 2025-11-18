@@ -28,7 +28,7 @@ def download_hf_file(repo_id, filename, local_dir="models"):
 # embedding Model Loader
 @st.cache_resource
 def load_embedding_model():
-    model_name = "sentence-transformers/all-MiniLM-L6-v2"
+    model_name = "sentence-transformers/all-mpnet-base-v2"
     return SentenceTransformer(model_name)
 
 
@@ -172,5 +172,6 @@ if uploaded_file and groupings_file:
     st.subheader("Final Results")
 
     st.dataframe(pd.DataFrame(results))
+
 
 
