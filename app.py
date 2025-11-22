@@ -11,25 +11,33 @@ st.title("Threat Event Grouping Application")
 
 # auto-download model from huggingface hub
 def download_hf_file(repo_id, filename, local_dir="models"):
-    os.makedirs(local_dir, exist_ok=True)
-    local_path = os.path.join(local_dir, filename)
+    try:
+        os.makedirs(local_dir, exist_ok=True)
+        local_path = os.path.join(local_dir, filename)
 
-    if os.path.exists(local_path):
-        return local_path
+        if os.path.exists(local_path):
+            return local_path
 
-    return hf_hub_download(
-        repo_id=repo_id,
-        filename=filename,
-        cache_dir=local_dir,
-        local_dir_use_symlinks=False  # required for Streamlit Cloud
-    )
+        return hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            cache_dir=local_dir,
+            local_dir_use_symlinks=False  # required for Streamlit Cloud
+        )
+    except:
+        st.error("Error downloading model file")
+        st.stop()
 
 
 # embedding Model Loader
 @st.cache_resource
 def load_embedding_model():
-    model_name = "intfloat/e5-base-v2"
-    return SentenceTransformer(model_name)
+    try:
+        model_name = "intfloat/e5-base-v2"
+        return SentenceTransformer(model_name)
+    except:
+        st.error("Failed to load embedding model")
+        st.stop()
 
 
 model = load_embedding_model()
@@ -38,17 +46,20 @@ model = load_embedding_model()
 # LLM Loader (GGUF models)
 @st.cache_resource
 def load_llm():
-    repo_id = "Qwen/Qwen2-0.5B-Instruct-GGUF"
-    file_name = "qwen2-0_5b-instruct-q8_0.gguf" 
+    try:
+        repo_id = "Qwen/Qwen2-0.5B-Instruct-GGUF"
+        file_name = "qwen2-0_5b-instruct-q8_0.gguf" 
 
-    model_path = download_hf_file(repo_id, file_name)
+        model_path = download_hf_file(repo_id, file_name)
 
-    return Llama(
-        model_path=model_path,
-        n_ctx=4096,
-        n_threads=8
-    )
-
+        return Llama(
+            model_path=model_path,
+            n_ctx=4096,
+            n_threads=8
+        )
+    except Exception as e:
+        st.error("Failed to load LLM")
+        st.stop()
 
 llm = load_llm()
 
@@ -94,22 +105,26 @@ def ai_propose_new_group(threat_event, risk_info):
 
 # function to convert string data to dataframe
 def string_to_df(data_string):
-    rows = data_string.split("<ROW>")
-    parsed = []
-    for row in rows:
-        row = row.strip()
-        if not row:
-            continue
+    try:
+        rows = data_string.split("<ROW>")
+        parsed = []
+        for row in rows:
+            row = row.strip()
+            if not row:
+                continue
 
-        col_pairs = row.split("<COL>")
-        row_dict = {}
+            col_pairs = row.split("<COL>")
+            row_dict = {}
 
-        for pair in col_pairs:
-            if "<SEP>" in pair:
-                colname, value = pair.split("<SEP>", 1)
-                row_dict[colname] = value
-        parsed.append(row_dict)
-    return pd.DataFrame(parsed)
+            for pair in col_pairs:
+                if "<SEP>" in pair:
+                    colname, value = pair.split("<SEP>", 1)
+                    row_dict[colname] = value
+            parsed.append(row_dict)
+        return pd.DataFrame(parsed)
+    except:
+        st.error("Failed to parse text into table")
+        return pd.DataFrame()
 
 # upload text
 groupings_text = st.text_area("Enter Groupings Data:", height=200)
@@ -136,8 +151,20 @@ if threat_text and groupings_text:
         st.stop()
 
     results = []
+    
+    # progress bar
+    total_rows = len(new_threats)
+    progress_bar = st.progress(0)
+    progress_text = st.empty()
 
     for idx, row in new_threats.iterrows():
+        
+        # update progress bar
+        progress = (idx + 1) / total_rows
+        progress_bar.progress(progress)
+        progress_text.write(f"Processing row {idx + 1} / {total_rows}")
+        
+        
         threat_event = row["Threat Event"]
         risk_info = row.get("Risk Scenario", "")
 
@@ -190,6 +217,9 @@ if threat_text and groupings_text:
             "FinalGroup": final_group,
             "Indicator": indicator
         })
+        
+    progress_bar.empty()
+    progress_text.empty()
 
     st.subheader("Final Results")
     st.dataframe(pd.DataFrame(results))
