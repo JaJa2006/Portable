@@ -138,7 +138,7 @@ if threat_text and groupings_text:
     groupings = string_to_df(groupings_text)
     
     if "Risk Scenario" not in groupings.columns or "Threat Event" not in groupings.columns or "Group Name" not in groupings.columns:
-        st.error("Uploaded file must have a 'Risk Scenario', 'Threat Event' and 'Group Name' column.")
+        st.error("Grouping data must have a 'Risk Scenario', 'Threat Event' and 'Group Name' column.")
         st.stop()
 
     threat_text = threat_text.replace("\r", "").strip()
@@ -152,7 +152,7 @@ if threat_text and groupings_text:
     )
 
     if "Risk Scenario" not in new_threats.columns or "Threat Event" not in new_threats.columns:
-        st.error("Uploaded file must have a 'Risk Scenario' and 'Threat Event' column.")
+        st.error("Threat data must have a 'Risk Scenario' and 'Threat Event' column.")
         st.stop()
 
     results = []
