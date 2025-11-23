@@ -8,6 +8,21 @@ import os
 
 st.title("Threat Event Grouping Application")
 
+# reset session button
+if st.button("Reset Session"):
+    st.session_state.clear()
+    st.experimental_rerun()
+    
+# session state variables
+if "results" not in st.session_state:
+    st.session_state.results = []
+
+if "progress" not in st.session_state:
+    st.session_state.progress = 0
+
+if "current_index" not in st.session_state:
+    st.session_state.current_index = 0
+
 
 # auto-download model from huggingface hub
 def download_hf_file(repo_id, filename, local_dir="models"):
@@ -22,7 +37,7 @@ def download_hf_file(repo_id, filename, local_dir="models"):
             repo_id=repo_id,
             filename=filename,
             cache_dir=local_dir,
-            local_dir_use_symlinks=False  # required for Streamlit Cloud
+            local_dir_use_symlinks=False
         )
     except:
         st.error("Error downloading model file")
@@ -43,7 +58,7 @@ def load_embedding_model():
 model = load_embedding_model()
 
 
-# LLM Loader (GGUF models)
+# LLM Loader
 @st.cache_resource
 def load_llm():
     try:
@@ -126,102 +141,116 @@ def string_to_df(data_string):
         st.error("Failed to parse text into table")
         return pd.DataFrame()
 
+# caching data and embeddings
+@st.cache_data
+def parse_groupings(text):
+    text = text.replace("\r", "").strip()
+    text = text.replace("\n", "").strip()
+    return string_to_df(text)
+
+@st.cache_data
+def parse_threats(text):
+    text = text.replace("\r", "").strip()
+    text = text.replace("\n", "").strip()
+    return string_to_df(text)
+
+@st.cache_data
+def compute_embeddings(events):
+    return model.encode(events, normalize_embeddings=True)
+
+
 # upload text
-groupings_text = st.text_area("Enter Groupings Data:", height=200)
+groupings_text = st.text_area("Enter Groupings Data:", height=200, key="groupings_text")
 
-threat_text = st.text_area("Enter Threat Data:", height=200)
+threat_text = st.text_area("Enter Threat Data:", height=200, key="threat_text")
 
-if threat_text and groupings_text:
+if st.session_state.groupings_text and st.session_state.threat_text:
     
-    groupings_text = groupings_text.replace("\r", "").strip()
-    groupings_text = groupings_text.replace("\n", "").strip()
-    groupings = string_to_df(groupings_text)
-    
-    group_embeddings = model.encode(groupings["Threat Event"].tolist(), normalize_embeddings=True)
+    groupings = parse_groupings(st.session_state.groupings_text)
+    new_threats = parse_threats(st.session_state.threat_text)
     
     if "Risk Scenario" not in groupings.columns or "Threat Event" not in groupings.columns or "Group Name" not in groupings.columns:
         st.error("Grouping data must have a 'Risk Scenario', 'Threat Event' and 'Group Name' column.")
         st.stop()
 
-    threat_text = threat_text.replace("\r", "").strip()
-    threat_text = threat_text.replace("\n", "").strip()
-    new_threats = string_to_df(threat_text)
-
     if "Risk Scenario" not in new_threats.columns or "Threat Event" not in new_threats.columns:
         st.error("Threat data must have a 'Risk Scenario' and 'Threat Event' column.")
         st.stop()
+        
+    group_embeddings = compute_embeddings(groupings["Threat Event"].tolist())
 
     results = []
     
     # progress bar
     total_rows = len(new_threats)
-    progress_bar = st.progress(0)
+    progress_bar = st.progress(st.session_state.progress)
     progress_text = st.empty()
 
     with st.spinner(""):
-        for idx, row in new_threats.iterrows():
-            
-            # update progress bar
-            progress = (idx + 1) / total_rows
-            progress_bar.progress(progress)
-            progress_text.write(f"Processing row {idx + 1} / {total_rows}")
-            
-            
+        for idx in range(st.session_state.current_index, total_rows):
+
+            row = new_threats.iloc[idx]
             threat_event = row["Threat Event"]
             risk_info = row.get("Risk Scenario", "")
 
             if pd.isna(threat_event) or str(threat_event).strip() in ["", "NA"]:
-                results.append({
+                st.session_state.results.append({
                     "ThreatEvent": threat_event,
                     "BestGroup": "NA",
                     "HighestAvgScore": "NA",
                     "FinalGroup": "NA",
                     "Indicator": "No Threat Event"
                 })
-                continue
-
-            event_emb = model.encode([threat_event], normalize_embeddings=True)
-            sims = util.cos_sim(event_emb, group_embeddings).numpy().flatten()
-
-            groupings["Similarity"] = sims
-            avg_scores = groupings.groupby("Group Name")["Similarity"].mean()
-
-            best_group = avg_scores.idxmax()
-            best_score = float(avg_scores.max() * 100)
-
-            indicator = ""
-            final_group = best_group
-
-            if best_score >= 90:
-                indicator = "Highly Accurate"
-            elif best_score >= 85:
-                indicator = "Moderately Accurate"
-            elif best_score >= 75:
-                llm_response = ai_check_group_match(threat_event, best_group, risk_info)
-                if "NOT GOOD" in llm_response:
-                    final_group = ai_propose_new_group(threat_event, risk_info)
-                    indicator = "AI Generated"
-                else:
-                    indicator = "Must Check"
             else:
-                llm_response = ai_check_group_match(threat_event, best_group, risk_info)
-                if "NOT GOOD" in llm_response:
-                    final_group = ai_propose_new_group(threat_event, risk_info)
-                    indicator = "AI Generated"
-                else:
-                    final_group = {best_group}
-                    indicator = "AI Verified"
+                event_emb = model.encode([threat_event], normalize_embeddings=True)
+                sims = util.cos_sim(event_emb, group_embeddings).numpy().flatten()
 
-            results.append({
-                "ThreatEvent": threat_event,
-                "BestGroup": best_group,
-                "HighestAvgScore": round(best_score, 2),
-                "FinalGroup": final_group,
-                "Indicator": indicator
-            })
+                groupings["Similarity"] = sims
+                avg_scores = groupings.groupby("Group Name")["Similarity"].mean()
+
+                best_group = avg_scores.idxmax()
+                best_score = float(avg_scores.max() * 100)
+
+                indicator = ""
+                final_group = best_group
+
+                if best_score >= 90:
+                    indicator = "Highly Accurate"
+                elif best_score >= 85:
+                    indicator = "Moderately Accurate"
+                elif best_score >= 75:
+                    llm_response = ai_check_group_match(threat_event, best_group, risk_info)
+                    if "NOT GOOD" in llm_response:
+                        final_group = ai_propose_new_group(threat_event, risk_info)
+                        indicator = "AI Generated"
+                    else:
+                        indicator = "Must Check"
+                else:
+                    llm_response = ai_check_group_match(threat_event, best_group, risk_info)
+                    if "NOT GOOD" in llm_response:
+                        final_group = ai_propose_new_group(threat_event, risk_info)
+                        indicator = "AI Generated"
+                    else:
+                        final_group = best_group
+                        indicator = "AI Verified"
+
+                st.session_state.results.append({
+                    "ThreatEvent": threat_event,
+                    "BestGroup": best_group,
+                    "HighestAvgScore": round(best_score, 2),
+                    "FinalGroup": final_group,
+                    "Indicator": indicator
+                })
+
+            # Update progress
+            st.session_state.current_index = idx + 1
+            st.session_state.progress = (idx + 1) / total_rows
+            progress_bar.progress(st.session_state.progress)
+            progress_text.write(f"Processing row {idx + 1}/{total_rows}")
         
-    progress_bar.empty()
-    progress_text.empty()
+    if st.session_state.current_index == total_rows:
+        progress_bar.empty()
+        progress_text.empty()
 
     st.subheader("Final Results")
     st.dataframe(pd.DataFrame(results))
