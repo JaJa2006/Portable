@@ -9,34 +9,14 @@ import os
 st.title("Threat Event Grouping Application")
 
 
-# auto-download model from huggingface hub
-def download_hf_file(repo_id, filename, local_dir="models"):
-    try:
-        os.makedirs(local_dir, exist_ok=True)
-        local_path = os.path.join(local_dir, filename)
-
-        if os.path.exists(local_path):
-            return local_path
-
-        return hf_hub_download(
-            repo_id=repo_id,
-            filename=filename,
-            cache_dir=local_dir,
-            local_dir_use_symlinks=False
-        )
-    except:
-        st.error("Error downloading model file")
-        st.stop()
-
-
 # embedding Model Loader
 @st.cache_resource
 def load_embedding_model():
     try:
         model_name = "intfloat/e5-base-v2"
         return SentenceTransformer(model_name)
-    except:
-        st.error("Failed to load embedding model")
+    except Exception as e:
+        st.error(f"Failed to load embedding model: {e}")
         st.stop()
 
 
@@ -47,19 +27,29 @@ model = load_embedding_model()
 @st.cache_resource
 def load_llm():
     try:
-        repo_id = "Qwen/Qwen2-0.5B-Instruct-GGUF"
-        file_name = "qwen2-0_5b-instruct-q8_0.gguf" 
+        repo_id = "SixOpen/Phi-3-mini-4k-instruct-Q4_K_M-GGUF"
+        file_name = "phi-3-mini-4k-instruct-q4_k_m.gguf"
 
-        model_path = download_hf_file(repo_id, file_name)
+        model_path = hf_hub_download(
+            repo_id=repo_id,
+            filename=file_name,
+            cache_dir="models",
+            local_dir_use_symlinks=False
+        )
 
         return Llama(
             model_path=model_path,
             n_ctx=4096,
-            n_threads=8
+            n_threads=8,
+            temperature=0.2,
+            top_p=0.9,
+            repeat_penalty=1.1,
+            verbose=False
         )
     except Exception as e:
-        st.error("Failed to load LLM")
+        st.error(f"Failed to load LLM: {e}")
         st.stop()
+
 
 llm = load_llm()
 
@@ -67,106 +57,126 @@ llm = load_llm()
 # LLM-based classification helpers
 def ai_check_group_match(threat_event, current_group, risk_info):
     prompt = f"""
-    You are a cybersecurity assistant analyzing event clustering.
+            You are a SOC analyst specializing in threat clustering.
 
-    Threat Event: {threat_event}
-    Proposed Group: {current_group}
-    Risk Context: {risk_info}
+            Threat Event:
+            {threat_event}
 
-    Respond with exactly one word:
-    - "GOOD" if the threat event fits well in this group
-    - "NOT GOOD" if it does not fit
-    """
+            Proposed Group:
+            {current_group}
 
-    full_prompt = f"<|im_start|>system\nYou are an expert cybersecurity event clustering assistant.<|im_end|>\n" \
-                  f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+            Risk Context:
+            {risk_info}
 
-    res = llm(full_prompt, max_tokens=10)
+            Answer with exactly:
+            GOOD or NOT GOOD
+            """
+            
+    prompt_format = f"""<|user|>
+                {prompt}<|end|>
+                <|assistant|>"""
+
+    res = llm(prompt_format, max_tokens=10)
     return res["choices"][0]["text"].strip().upper()
 
 
 def ai_propose_new_group(threat_event, risk_info):
+    
     prompt = f"""
-    You are a cybersecurity assistant helping cluster threat events.
+    You are a SOC analyst.
 
-    Threat Event: {threat_event}
-    Risk Context: {risk_info}
-    Existing groups: {', '.join(groupings['Group Name'].unique().tolist())}
+    Generate ONE short cyber threat group name.
 
-    Propose a short, clear name for a new threat group.
-    Respond ONLY with the name — no explanations.
+    Rules:
+    - 15 words maximum
+    - Use cybersecurity terminology
+    - No punctuation
+    - No explanation
+
+    Threat Event:
+    {threat_event}
+
+    Risk Context:
+    {risk_info}
+
+    Existing Groups:
+    {', '.join(groupings['Group Name'].unique().tolist())}
+
+    Provide a new, concise threat group name in plain text:
     """
+    
+    prompt_format = f"""<|user|>
+                    {prompt}<|end|>
+                    <|assistant|>"""
 
-    full_prompt = f"<|im_start|>system\nYou are an expert cybersecurity clustering assistant.<|im_end|>\n" \
-                  f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
-
-    res = llm(full_prompt, max_tokens=40)
+    res = llm(prompt_format, max_tokens=40)
     return res["choices"][0]["text"].strip()
 
-# function to convert string data to dataframe
-def string_to_df(data_string):
+
+# file uploader
+groupings_file = st.file_uploader(
+    "Upload Groupings File",
+    type=["xlsx"]
+)
+
+threat_file = st.file_uploader(
+    "Upload Threat Events File",
+    type=["xlsx"]
+)
+
+if groupings_file and threat_file:
     try:
-        rows = data_string.split("<ROW>")
-        parsed = []
-        for row in rows:
-            row = row.strip()
-            if not row:
-                continue
-
-            col_pairs = row.split("<COL>")
-            row_dict = {}
-
-            for pair in col_pairs:
-                if "<SEP>" in pair:
-                    colname, value = pair.split("<SEP>", 1)
-                    row_dict[colname] = value
-            parsed.append(row_dict)
-        return pd.DataFrame(parsed)
-    except:
-        st.error("Failed to parse text into table")
-        return pd.DataFrame()
-
-# upload text
-groupings_text = st.text_area("Enter Groupings Data:", height=200)
-
-threat_text = st.text_area("Enter Threat Data:", height=200)
-
-if threat_text and groupings_text:
-    
-    groupings_text = groupings_text.replace("\r", "").strip()
-    groupings_text = groupings_text.replace("\n", "").strip()
-    groupings = string_to_df(groupings_text)
-    
-    group_embeddings = model.encode(groupings["Threat Event"].tolist(), normalize_embeddings=True)
-    
-    if "Risk Scenario" not in groupings.columns or "Threat Event" not in groupings.columns or "Group Name" not in groupings.columns:
-        st.error("Grouping data must have a 'Risk Scenario', 'Threat Event' and 'Group Name' column.")
+        groupings = pd.read_excel(groupings_file)
+    except Exception:
+        st.error("Failed to read Groupings file. Ensure it is a valid XLSX.")
         st.stop()
 
-    threat_text = threat_text.replace("\r", "").strip()
-    threat_text = threat_text.replace("\n", "").strip()
-    new_threats = string_to_df(threat_text)
-
-    if "Risk Scenario" not in new_threats.columns or "Threat Event" not in new_threats.columns:
-        st.error("Threat data must have a 'Risk Scenario' and 'Threat Event' column.")
+    try:
+        new_threats = pd.read_excel(threat_file)
+    except Exception:
+        st.error("Failed to read Threat file. Ensure it is a valid XLSX.")
         st.stop()
+
+    # validate columns
+    required_group_cols = {"Risk Scenario", "Threat Event", "Group Name"}
+    required_threat_cols = {"Risk Scenario", "Threat Event"}
+
+    if not required_group_cols.issubset(groupings.columns):
+        st.error(
+            f"Groupings file must contain columns: {', '.join(required_group_cols)}"
+        )
+        st.stop()
+
+    if not required_threat_cols.issubset(new_threats.columns):
+        st.error(
+            f"Threat file must contain columns: {', '.join(required_threat_cols)}"
+        )
+        st.stop()
+
+    groupings = groupings.dropna(subset=["Threat Event", "Group Name"])
+
+    if groupings.empty:
+        st.error("Groupings file contains no valid Threat Event data.")
+        st.stop()
+
+    # precompute embeddings
+    group_embeddings = model.encode(
+        groupings["Threat Event"].tolist(),
+        normalize_embeddings=True
+    )
 
     results = []
-    
-    # progress bar
+
     total_rows = len(new_threats)
     progress_bar = st.progress(0)
     progress_text = st.empty()
 
     with st.spinner(""):
         for idx, row in new_threats.iterrows():
-            
-            # update progress bar
             progress = (idx + 1) / total_rows
             progress_bar.progress(progress)
             progress_text.write(f"Processing row {idx + 1} / {total_rows}")
-            
-            
+
             threat_event = row["Threat Event"]
             risk_info = row.get("Risk Scenario", "")
 
@@ -180,12 +190,15 @@ if threat_text and groupings_text:
                 })
                 continue
 
-            event_emb = model.encode([threat_event], normalize_embeddings=True)
+            event_emb = model.encode(
+                [threat_event],
+                normalize_embeddings=True
+            )
+
             sims = util.cos_sim(event_emb, group_embeddings).numpy().flatten()
-
             groupings["Similarity"] = sims
-            avg_scores = groupings.groupby("Group Name")["Similarity"].mean()
 
+            avg_scores = groupings.groupby("Group Name")["Similarity"].mean()
             best_group = avg_scores.idxmax()
             best_score = float(avg_scores.max() * 100)
 
@@ -197,19 +210,26 @@ if threat_text and groupings_text:
             elif best_score >= 85:
                 indicator = "Moderately Accurate"
             elif best_score >= 75:
-                llm_response = ai_check_group_match(threat_event, best_group, risk_info)
+                llm_response = ai_check_group_match(
+                    threat_event, best_group, risk_info
+                )
                 if "NOT GOOD" in llm_response:
-                    final_group = ai_propose_new_group(threat_event, risk_info)
+                    final_group = ai_propose_new_group(
+                        threat_event, risk_info
+                    )
                     indicator = "AI Generated"
                 else:
                     indicator = "Must Check"
             else:
-                llm_response = ai_check_group_match(threat_event, best_group, risk_info)
+                llm_response = ai_check_group_match(
+                    threat_event, best_group, risk_info
+                )
                 if "NOT GOOD" in llm_response:
-                    final_group = ai_propose_new_group(threat_event, risk_info)
+                    final_group = ai_propose_new_group(
+                        threat_event, risk_info
+                    )
                     indicator = "AI Generated"
                 else:
-                    final_group = {best_group}
                     indicator = "AI Verified"
 
             results.append({
@@ -219,7 +239,7 @@ if threat_text and groupings_text:
                 "FinalGroup": final_group,
                 "Indicator": indicator
             })
-        
+
     progress_bar.empty()
     progress_text.empty()
 
