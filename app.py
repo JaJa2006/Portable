@@ -85,7 +85,7 @@ def ai_propose_new_group(threat_event, risk_info):
     prompt = f"""
     You are a SOC analyst.
 
-    Generate ONE short cyber threat group name.
+    Generate ONE short cyber threat cluster name this threat can fall under.
 
     Rules:
     - 15 words maximum
@@ -102,7 +102,7 @@ def ai_propose_new_group(threat_event, risk_info):
     Existing Groups:
     {', '.join(groupings['Group Name'].unique().tolist())}
 
-    Provide a new, concise threat group name in plain text:
+    Provide a new, concise threat cluster name in plain text:
     """
     
     prompt_format = f"""<|user|>
@@ -245,3 +245,4 @@ if groupings_file and threat_file:
 
     st.subheader("Final Results")
     st.dataframe(pd.DataFrame(results))
+
